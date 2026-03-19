@@ -1,0 +1,9 @@
+path: C:\Users\isYun\Desktop\data\FengShui_GroupCls_partial\door
+train: train
+val: val
+test: test
+
+nc: 2
+names:
+  0: main_door
+  1: room_door

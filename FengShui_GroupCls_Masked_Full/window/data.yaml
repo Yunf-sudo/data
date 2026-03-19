@@ -1,0 +1,9 @@
+path: C:\Users\isYun\Desktop\data\FengShui_GroupCls_Masked_Full\window
+train: train
+val: val
+test: test
+
+nc: 2
+names:
+  0: floor_window
+  1: normal_window

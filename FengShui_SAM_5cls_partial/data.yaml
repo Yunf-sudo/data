@@ -1,0 +1,12 @@
+path: C:\Users\isYun\Desktop\data\FengShui_SAM_5cls_partial
+train: images/train
+val: images/val
+test: images/test
+
+nc: 5
+names:
+  0: broad_leaf_live
+  1: sharp_leaf_live
+  2: fake_plant
+  3: dining_table
+  4: coffee_table

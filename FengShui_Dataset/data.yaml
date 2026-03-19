@@ -1,0 +1,28 @@
+# Auto-generated FengShui detection dataset
+path: C:\Users\isYun\Desktop\data\FengShui_Dataset
+train: images/train
+val: images/val
+test: images/test
+
+nc: 20
+names:
+  0: main_door
+  1: room_door
+  2: floor_window
+  3: normal_window
+  4: stove
+  5: sink
+  6: stairs
+  7: water_feature
+  8: broad_leaf_live
+  9: sharp_leaf_live
+  10: fake_plant
+  11: bed
+  12: sofa
+  13: desk
+  14: dining_table
+  15: coffee_table
+  16: mirror
+  17: beam
+  18: toilet
+  19: cabinet

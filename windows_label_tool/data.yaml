@@ -1,0 +1,40 @@
+# RT-DETR / YOLO dataset config template
+# 把 path 改成你自己的数据集根目录
+# 目录推荐结构：
+# dataset_root/
+#   images/
+#     train/
+#     val/
+#     test/
+#   labels/
+#     train/
+#     val/
+#     test/
+
+path: C:/your_dataset_root
+train: images/train
+val: images/val
+test: images/test
+
+nc: 20
+names:
+  0: beam
+  1: bed
+  2: broad_leaf_live
+  3: cabinet
+  4: coffee_table
+  5: desk
+  6: dining_table
+  7: fake_plant
+  8: floor_window
+  9: main_door
+  10: mirror
+  11: normal_window
+  12: room_door
+  13: sharp_leaf_live
+  14: sink
+  15: sofa
+  16: stairs
+  17: stove
+  18: toilet
+  19: water_feature

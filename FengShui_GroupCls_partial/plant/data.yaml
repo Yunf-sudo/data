@@ -1,0 +1,10 @@
+path: C:\Users\isYun\Desktop\data\FengShui_GroupCls_partial\plant
+train: train
+val: val
+test: test
+
+nc: 3
+names:
+  0: broad_leaf_live
+  1: fake_plant
+  2: sharp_leaf_live
