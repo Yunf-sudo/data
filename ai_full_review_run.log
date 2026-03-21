@@ -1,0 +1,9 @@
+[clean] Removing previous output: C:\Users\isYun\Desktop\data\FengShui_Dataset\ai_full_review
+[stage] Dataset directory: C:\Users\isYun\Desktop\data\FengShui_Dataset
+[stage] Review workspace: C:\Users\isYun\Desktop\data\FengShui_Dataset\ai_full_review
+[stage] Class order: beam, bed, broad_leaf_live, cabinet, coffee_table, desk, dining_table, fake_plant, floor_window, main_door, mirror, normal_window, room_door, sharp_leaf_live, sink, sofa, stairs, stove, toilet, water_feature
+[stage] Cached detections reused: 0
+[stage] Images to detect now: 20164
+[stage] Loading Grounding DINO model...
+[load] Grounding DINO model: C:\Users\isYun\Desktop\data\models\grounding-dino-base
+[runtime] device=cuda batch_size=3 amp=bfloat16 max_batch_pixels=1600000 inference_max_side=1024
