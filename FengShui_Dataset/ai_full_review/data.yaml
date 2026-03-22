@@ -1,5 +1,5 @@
 # Auto-generated review workspace config
-path: C:\Users\isYun\Desktop\data\FengShui_Dataset\ai_full_review_cuda_smoke4
+path: E:\cyf_cv\work\data\data\FengShui_Dataset\ai_full_review
 train: images
 val: images
 test: images
