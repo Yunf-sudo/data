@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +26,13 @@ ZH = {
     "stairs": "楼梯", "stove": "炉灶", "toilet": "马桶", "water_feature": "水景/鱼缸",
 }
 COLORS = ["#ff4d4f", "#1677ff", "#52c41a", "#fa8c16", "#722ed1", "#13c2c2", "#eb2f96", "#2f54eb"]
+REVIEW_FILTER_LABELS = {
+    "待复核高风险": "pending_risk",
+    "疑似重复框": "duplicate_boxes",
+    "全部高风险": "high_risk",
+    "未复核全部": "unreviewed_all",
+    "全部图片": "all",
+}
 
 
 @dataclass
@@ -133,6 +141,7 @@ class AdvancedLabelTool:
         self.images_dir: Path | None = None
         self.labels_dir: Path | None = None
         self.classes: list[str] = list(DEFAULT_CLASSES)
+        self.all_image_paths: list[Path] = []
         self.image_paths: list[Path] = []
         self.current_index = 0
         self.current_image_path: Path | None = None
@@ -155,8 +164,14 @@ class AdvancedLabelTool:
         self.label_var = tk.StringVar(value="标签目录：未选择")
         self.info_var = tk.StringVar(value="当前图片：")
         self.count_var = tk.StringVar(value="进度：0 / 0")
+        self.flags_var = tk.StringVar(value="复核标记：无")
         self.jump_var = tk.StringVar()
         self.last_image_by_dir: dict[str, str] = {}
+        self.manifest_flags_by_relpath: dict[str, set[str]] = {}
+        self.local_flags_by_relpath: dict[str, set[str]] = {}
+        self.reviewed_images: dict[str, bool] = {}
+        self.review_mode_var = tk.BooleanVar(value=True)
+        self.review_filter_var = tk.StringVar(value="待复核高风险")
         self._build_ui()
         self._load_state()
         self.root.bind("<Key>", self._on_key)
@@ -180,6 +195,19 @@ class AdvancedLabelTool:
         ttk.Button(row_jump, text="选图", command=self._choose_image_file).pack(side=tk.LEFT)
         ttk.Entry(row_jump, textvariable=self.jump_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 6))
         ttk.Button(row_jump, text="跳转", command=self._jump_to_image).pack(side=tk.LEFT)
+        row_review = ttk.Frame(left)
+        row_review.pack(fill=tk.X, pady=(0, 8))
+        ttk.Checkbutton(row_review, text="复核模式", variable=self.review_mode_var, command=self._apply_review_filter).pack(side=tk.LEFT)
+        self.review_filter_box = ttk.Combobox(
+            row_review,
+            textvariable=self.review_filter_var,
+            values=list(REVIEW_FILTER_LABELS.keys()),
+            state="readonly",
+            width=12,
+        )
+        self.review_filter_box.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 6))
+        self.review_filter_box.bind("<<ComboboxSelected>>", lambda _e: self._apply_review_filter())
+        ttk.Button(row_review, text="通过并下一张", command=self._approve_and_next).pack(side=tk.LEFT)
 
         ttk.Label(left, text="当前框").pack(anchor=tk.W)
         self.box_list = tk.Listbox(left, height=14, exportselection=False)
@@ -198,8 +226,9 @@ class AdvancedLabelTool:
         ttk.Button(row3, text="删框", command=self._delete_selected).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
         ttk.Button(row3, text="空图", command=self._mark_empty).pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Label(left, textvariable=self.count_var).pack(anchor=tk.W)
+        ttk.Label(left, textvariable=self.flags_var, wraplength=320, justify=tk.LEFT).pack(fill=tk.X, pady=(4, 0))
         ttk.Label(left, textvariable=self.info_var, wraplength=320, justify=tk.LEFT).pack(fill=tk.X, pady=(4, 8))
-        ttk.Label(left, text="快捷键\nEnter/C/空格：改类别\nDelete/BackSpace：删框\nA/← 上一张，D/→ 下一张\nS 保存，E 空图\n左键拖空白画框，拖框移动，拖控制点缩放", wraplength=320, justify=tk.LEFT).pack(fill=tk.X)
+        ttk.Label(left, text="快捷键\nEnter/C/空格：改类别\nDelete/BackSpace：删框\nA/← 上一张，D/→ 下一张\nQ 复核通过并下一张，G 跳转\nS 保存，E 空图\n左键拖空白画框，拖框移动，拖控制点缩放", wraplength=320, justify=tk.LEFT).pack(fill=tk.X)
 
         self.canvas = tk.Canvas(right, bg="#1f1f1f", highlightthickness=0, cursor="crosshair")
         self.canvas.pack(fill=tk.BOTH, expand=True)
@@ -221,6 +250,13 @@ class AdvancedLabelTool:
         raw_last = state.get("last_image_by_dir") or {}
         if isinstance(raw_last, dict):
             self.last_image_by_dir = {str(k): str(v) for k, v in raw_last.items() if k and v}
+        raw_reviewed = state.get("reviewed_images") or {}
+        if isinstance(raw_reviewed, dict):
+            self.reviewed_images = {str(k): bool(v) for k, v in raw_reviewed.items() if k}
+        self.review_mode_var.set(bool(state.get("review_mode", True)))
+        review_filter = str(state.get("review_filter") or "待复核高风险")
+        if review_filter in REVIEW_FILTER_LABELS:
+            self.review_filter_var.set(review_filter)
         if state.get("images_dir") and Path(state["images_dir"]).exists():
             self.images_dir = Path(state["images_dir"])
             self.path_var.set(f"图片目录：{self.images_dir}")
@@ -242,6 +278,9 @@ class AdvancedLabelTool:
             "classes": self.classes,
             "last_image": str(self.current_image_path) if self.current_image_path else "",
             "last_image_by_dir": self.last_image_by_dir,
+            "review_mode": bool(self.review_mode_var.get()),
+            "review_filter": self.review_filter_var.get(),
+            "reviewed_images": self.reviewed_images,
         }, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _class_text(self, cid: int) -> str:
@@ -270,6 +309,7 @@ class AdvancedLabelTool:
             return
         self.labels_dir = Path(path)
         self.label_var.set(f"标签目录：{self.labels_dir}")
+        self._refresh_images()
         self._load_image()
         self._save_state()
 
@@ -286,9 +326,152 @@ class AdvancedLabelTool:
         return self.labels_dir / image_path.relative_to(self.images_dir).with_suffix(".txt")
 
     def _refresh_images(self) -> None:
-        self.image_paths = sorted(p for p in self.images_dir.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS) if self.images_dir else []
+        self.all_image_paths = sorted(
+            p for p in self.images_dir.rglob("*")
+            if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
+        ) if self.images_dir else []
+        self._load_review_metadata()
+        if self.review_mode_var.get():
+            mode = REVIEW_FILTER_LABELS.get(self.review_filter_var.get(), "pending_risk")
+            self.image_paths = [path for path in self.all_image_paths if self._include_in_review_queue(path, mode)]
+        else:
+            self.image_paths = list(self.all_image_paths)
+        self._update_count_var()
+
+    def _update_count_var(self) -> None:
         current = min(self.current_index + 1, len(self.image_paths)) if self.image_paths else 0
-        self.count_var.set(f"进度：{current} / {len(self.image_paths)}")
+        if self.review_mode_var.get():
+            self.count_var.set(f"进度：{current} / {len(self.image_paths)} | 全量 {len(self.all_image_paths)}")
+        else:
+            self.count_var.set(f"进度：{current} / {len(self.image_paths)}")
+
+    def _image_relpath_key(self, image_path: Path) -> str:
+        if self.images_dir is None:
+            return image_path.name
+        try:
+            return image_path.relative_to(self.images_dir).as_posix()
+        except ValueError:
+            return image_path.name
+
+    def _image_state_key(self, image_path: Path) -> str:
+        return str(image_path.resolve())
+
+    def _find_manifest(self) -> Path | None:
+        if not self.images_dir:
+            return None
+        for base in [self.images_dir.resolve(), *self.images_dir.resolve().parents]:
+            path = base / "review_manifest.csv"
+            if path.exists():
+                return path
+        return None
+
+    def _load_review_metadata(self) -> None:
+        self._load_manifest_flags()
+        self.local_flags_by_relpath = {}
+        for path in self.all_image_paths:
+            flags = self._detect_local_flags(path)
+            if flags:
+                self.local_flags_by_relpath[self._image_relpath_key(path)] = flags
+
+    def _load_manifest_flags(self) -> None:
+        self.manifest_flags_by_relpath = {}
+        manifest_path = self._find_manifest()
+        if manifest_path is None:
+            return
+        try:
+            with manifest_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                for row in csv.DictReader(handle):
+                    rel = str(row.get("export_image") or "").replace("\\", "/").strip()
+                    if not rel:
+                        continue
+                    flags = {item for item in str(row.get("flags") or "").split(";") if item}
+                    if flags:
+                        self.manifest_flags_by_relpath[rel] = flags
+        except Exception:
+            self.manifest_flags_by_relpath = {}
+
+    def _flags_for_image(self, image_path: Path) -> set[str]:
+        rel = self._image_relpath_key(image_path)
+        return set(self.manifest_flags_by_relpath.get(rel, set())) | set(self.local_flags_by_relpath.get(rel, set()))
+
+    def _include_in_review_queue(self, image_path: Path, mode: str) -> bool:
+        flags = self._flags_for_image(image_path)
+        reviewed = self.reviewed_images.get(self._image_state_key(image_path), False)
+        if mode == "all":
+            return True
+        if mode == "unreviewed_all":
+            return not reviewed
+        if mode == "high_risk":
+            return bool(flags)
+        if mode == "duplicate_boxes":
+            return "same_class_overlap" in flags and not reviewed
+        return bool(flags) and not reviewed
+
+    def _read_labels_for_path(self, image_path: Path) -> list[YoloBox]:
+        label_path = self._label_path(image_path)
+        if label_path is None or not label_path.exists():
+            return []
+        return [
+            box
+            for line in label_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+            if (box := YoloBox.from_line(line))
+        ]
+
+    def _box_norm_coords(self, box: YoloBox) -> tuple[float, float, float, float]:
+        return (
+            box.x_center - box.width / 2,
+            box.y_center - box.height / 2,
+            box.x_center + box.width / 2,
+            box.y_center + box.height / 2,
+        )
+
+    def _is_suspicious_same_class_pair(self, first: YoloBox, second: YoloBox) -> bool:
+        ax1, ay1, ax2, ay2 = self._box_norm_coords(first)
+        bx1, by1, bx2, by2 = self._box_norm_coords(second)
+        inter_w = max(0.0, min(ax2, bx2) - max(ax1, bx1))
+        inter_h = max(0.0, min(ay2, by2) - max(ay1, by1))
+        inter = inter_w * inter_h
+        if inter <= 0:
+            return False
+        area_a = max(first.width * first.height, 1e-6)
+        area_b = max(second.width * second.height, 1e-6)
+        union = area_a + area_b - inter
+        iou = inter / union if union > 0 else 0.0
+        cover = inter / min(area_a, area_b)
+        area_ratio = max(area_a, area_b) / max(min(area_a, area_b), 1e-6)
+        center_dx = abs(first.x_center - second.x_center) / max(min(first.width, second.width), 1e-6)
+        center_dy = abs(first.y_center - second.y_center) / max(min(first.height, second.height), 1e-6)
+        return cover >= 0.72 or iou >= 0.45 or (area_ratio <= 1.8 and center_dx <= 0.35 and center_dy <= 0.35)
+
+    def _detect_local_flags(self, image_path: Path) -> set[str]:
+        boxes = self._read_labels_for_path(image_path)
+        flags: set[str] = set()
+        for i, first in enumerate(boxes):
+            for second in boxes[i + 1:]:
+                if first.class_id != second.class_id:
+                    continue
+                if self._is_suspicious_same_class_pair(first, second):
+                    flags.add("same_class_overlap")
+                    break
+            if "same_class_overlap" in flags:
+                break
+        return flags
+
+    def _refresh_current_local_flags(self) -> None:
+        if self.current_image_path is None:
+            return
+        rel = self._image_relpath_key(self.current_image_path)
+        flags = self._detect_local_flags(self.current_image_path)
+        if flags:
+            self.local_flags_by_relpath[rel] = flags
+        else:
+            self.local_flags_by_relpath.pop(rel, None)
+        current_flags = sorted(self._flags_for_image(self.current_image_path))
+        reviewed = self.reviewed_images.get(self._image_state_key(self.current_image_path), False)
+        flag_text = "；".join(current_flags) if current_flags else "无"
+        if reviewed:
+            flag_text = f"{flag_text} | 已复核"
+        self.flags_var.set(f"复核标记：{flag_text}")
 
     def _restore_last_image(self, fallback_last: str | None = None) -> None:
         if not self.images_dir or not self.image_paths:
@@ -314,6 +497,8 @@ class AdvancedLabelTool:
             self.current_image_path = None
             self.boxes = []
             self.selected = None
+            self.flags_var.set("复核标记：当前筛选没有图片")
+            self._update_count_var()
             self._render()
             return
         self.current_index = max(0, min(self.current_index, len(self.image_paths) - 1))
@@ -332,8 +517,14 @@ class AdvancedLabelTool:
         self.anchor_box = None
         self.handle_name = None
         self.cache_key = None
-        self.count_var.set(f"进度：{self.current_index + 1} / {len(self.image_paths)}")
+        self._update_count_var()
         self.info_var.set(f"当前图片：{self.current_image_path.name}")
+        flags = sorted(self._flags_for_image(self.current_image_path))
+        reviewed = self.reviewed_images.get(self._image_state_key(self.current_image_path), False)
+        flag_text = "；".join(flags) if flags else "无"
+        if reviewed:
+            flag_text = f"{flag_text} | 已复核"
+        self.flags_var.set(f"复核标记：{flag_text}")
         self._refresh_box_list()
         self._render()
         self._save_state()
@@ -341,10 +532,7 @@ class AdvancedLabelTool:
     def _read_labels(self) -> list[YoloBox]:
         if not self.current_image_path:
             return []
-        label_path = self._label_path(self.current_image_path)
-        if label_path is None or not label_path.exists():
-            return []
-        return [box for line in label_path.read_text(encoding="utf-8", errors="ignore").splitlines() if (box := YoloBox.from_line(line))]
+        return self._read_labels_for_path(self.current_image_path)
 
     def _save(self) -> None:
         if not self.current_image_path:
@@ -355,6 +543,7 @@ class AdvancedLabelTool:
             return
         label_path.parent.mkdir(parents=True, exist_ok=True)
         label_path.write_text("\n".join(box.to_line() for box in self.boxes), encoding="utf-8")
+        self._refresh_current_local_flags()
         self.status.set(f"已保存：{label_path.name}")
         self._save_state()
 
@@ -474,6 +663,29 @@ class AdvancedLabelTool:
         self._refresh_images()
         self._restore_last_image()
         self._load_image()
+
+    def _apply_review_filter(self) -> None:
+        current_path = self.current_image_path
+        current_index = self.current_index
+        self._refresh_images()
+        if current_path and current_path in self.image_paths:
+            self.current_index = self.image_paths.index(current_path)
+        else:
+            self.current_index = min(current_index, max(0, len(self.image_paths) - 1))
+        self._load_image()
+        self._save_state()
+
+    def _approve_and_next(self) -> None:
+        if self.current_image_path is None:
+            return
+        approved_name = self.current_image_path.name
+        self.reviewed_images[self._image_state_key(self.current_image_path)] = True
+        current_index = self.current_index
+        self._refresh_images()
+        self.current_index = min(current_index, max(0, len(self.image_paths) - 1))
+        self._load_image()
+        self.status.set(f"已标记复核完成：{approved_name}")
+        self._save_state()
 
     def _choose_image_file(self) -> None:
         if not self.images_dir:
@@ -650,6 +862,8 @@ class AdvancedLabelTool:
             self._delete_selected()
         elif key in {"Return", "KP_Enter", "space", "c", "C"}:
             self._change_class()
+        elif key in {"q", "Q"}:
+            self._approve_and_next()
         elif key in {"Left", "a", "A", "Prior"}:
             self._prev()
         elif key in {"Right", "d", "D", "Next"}:
