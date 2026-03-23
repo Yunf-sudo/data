@@ -1,0 +1,21 @@
+path: C:\Users\isYun\Desktop\data\AAA_data
+train: images/train
+val: images/val
+test: images/test
+
+nc: 14
+names:
+  0: beam
+  1: bed
+  2: plant
+  3: cabinet
+  4: table
+  5: window
+  6: door
+  7: mirror
+  8: sink
+  9: sofa
+  10: stairs
+  11: stove
+  12: toilet
+  13: water_feature
