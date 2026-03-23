@@ -155,6 +155,8 @@ class AdvancedLabelTool:
         self.label_var = tk.StringVar(value="标签目录：未选择")
         self.info_var = tk.StringVar(value="当前图片：")
         self.count_var = tk.StringVar(value="进度：0 / 0")
+        self.jump_var = tk.StringVar()
+        self.last_image_by_dir: dict[str, str] = {}
         self._build_ui()
         self._load_state()
         self.root.bind("<Key>", self._on_key)
@@ -173,6 +175,11 @@ class AdvancedLabelTool:
         row.pack(fill=tk.X, pady=(0, 8))
         ttk.Button(row, text="从 data.yaml 读取", command=self._load_classes_yaml).pack(side=tk.LEFT, fill=tk.X, expand=True)
         ttk.Button(row, text="刷新", command=self._reload).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0))
+        row_jump = ttk.Frame(left)
+        row_jump.pack(fill=tk.X, pady=(0, 8))
+        ttk.Button(row_jump, text="选图", command=self._choose_image_file).pack(side=tk.LEFT)
+        ttk.Entry(row_jump, textvariable=self.jump_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 6))
+        ttk.Button(row_jump, text="跳转", command=self._jump_to_image).pack(side=tk.LEFT)
 
         ttk.Label(left, text="当前框").pack(anchor=tk.W)
         self.box_list = tk.Listbox(left, height=14, exportselection=False)
@@ -211,6 +218,9 @@ class AdvancedLabelTool:
             except Exception:
                 state = {}
         self.classes = [str(x) for x in (state.get("classes") or DEFAULT_CLASSES)]
+        raw_last = state.get("last_image_by_dir") or {}
+        if isinstance(raw_last, dict):
+            self.last_image_by_dir = {str(k): str(v) for k, v in raw_last.items() if k and v}
         if state.get("images_dir") and Path(state["images_dir"]).exists():
             self.images_dir = Path(state["images_dir"])
             self.path_var.set(f"图片目录：{self.images_dir}")
@@ -219,21 +229,19 @@ class AdvancedLabelTool:
             self.label_var.set(f"标签目录：{self.labels_dir}")
         if self.images_dir:
             self._refresh_images()
-            last = state.get("last_image")
-            if last:
-                try:
-                    self.current_index = self.image_paths.index(Path(last))
-                except ValueError:
-                    pass
+            self._restore_last_image(state.get("last_image"))
             self._load_image()
         self._save_state()
 
     def _save_state(self) -> None:
+        if self.images_dir and self.current_image_path:
+            self.last_image_by_dir[str(self.images_dir.resolve())] = str(self.current_image_path.resolve())
         STATE_FILE.write_text(json.dumps({
             "images_dir": str(self.images_dir) if self.images_dir else "",
             "labels_dir": str(self.labels_dir) if self.labels_dir else "",
             "classes": self.classes,
             "last_image": str(self.current_image_path) if self.current_image_path else "",
+            "last_image_by_dir": self.last_image_by_dir,
         }, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _class_text(self, cid: int) -> str:
@@ -251,8 +259,8 @@ class AdvancedLabelTool:
         if self.labels_dir is None:
             self.labels_dir = self._guess_labels_dir(self.images_dir)
             self.label_var.set(f"标签目录：{self.labels_dir}")
-        self.current_index = 0
         self._refresh_images()
+        self._restore_last_image()
         self._load_image()
         self._save_state()
 
@@ -281,6 +289,24 @@ class AdvancedLabelTool:
         self.image_paths = sorted(p for p in self.images_dir.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS) if self.images_dir else []
         current = min(self.current_index + 1, len(self.image_paths)) if self.image_paths else 0
         self.count_var.set(f"进度：{current} / {len(self.image_paths)}")
+
+    def _restore_last_image(self, fallback_last: str | None = None) -> None:
+        if not self.images_dir or not self.image_paths:
+            self.current_index = 0
+            return
+        candidates: list[Path] = []
+        remembered = self.last_image_by_dir.get(str(self.images_dir.resolve()))
+        if remembered:
+            candidates.append(Path(remembered))
+        if fallback_last:
+            candidates.append(Path(fallback_last))
+        for candidate in candidates:
+            try:
+                self.current_index = self.image_paths.index(candidate)
+                return
+            except ValueError:
+                continue
+        self.current_index = max(0, min(self.current_index, len(self.image_paths) - 1))
 
     def _load_image(self) -> None:
         if not self.image_paths:
@@ -446,6 +472,51 @@ class AdvancedLabelTool:
 
     def _reload(self) -> None:
         self._refresh_images()
+        self._restore_last_image()
+        self._load_image()
+
+    def _choose_image_file(self) -> None:
+        if not self.images_dir:
+            messagebox.showwarning("未选择图片目录", "请先选择图片目录。")
+            return
+        path = filedialog.askopenfilename(
+            title="选择要跳转的图片",
+            initialdir=str(self.images_dir),
+            filetypes=[("Image files", "*.jpg *.jpeg *.png *.bmp *.webp *.avif"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        target = Path(path)
+        try:
+            self.current_index = self.image_paths.index(target)
+        except ValueError:
+            messagebox.showwarning("不在当前目录", f"{target}\n\n不在当前图片列表里。")
+            return
+        self.jump_var.set(target.name)
+        self._load_image()
+
+    def _jump_to_image(self) -> None:
+        if not self.image_paths:
+            return
+        raw = self.jump_var.get().strip()
+        if not raw:
+            return
+        target_index: int | None = None
+        if raw.isdigit():
+            idx = int(raw) - 1
+            if 0 <= idx < len(self.image_paths):
+                target_index = idx
+        if target_index is None and self.images_dir is not None:
+            raw_lower = raw.lower()
+            for i, path in enumerate(self.image_paths):
+                rel = str(path.relative_to(self.images_dir)).lower()
+                if raw_lower in path.name.lower() or raw_lower in rel:
+                    target_index = i
+                    break
+        if target_index is None:
+            messagebox.showwarning("未找到图片", f"没有找到：{raw}")
+            return
+        self.current_index = target_index
         self._load_image()
 
     def _to_image(self, cx: int, cy: int, clamp: bool) -> tuple[float, float] | None:
@@ -583,6 +654,8 @@ class AdvancedLabelTool:
             self._prev()
         elif key in {"Right", "d", "D", "Next"}:
             self._next()
+        elif key in {"g", "G"}:
+            self._jump_to_image()
         elif key in {"s", "S"}:
             self._save()
         elif key in {"e", "E"}:
